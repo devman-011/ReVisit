@@ -25,7 +25,7 @@ class DecryptRequest(BaseModel):
 @app.post("/decrypt")
 def decrypt(payload: DecryptRequest, x_api_key: str = Header(None)):
     # ---- Auth ----
-    if x_api_key != API_KEY:
+    if x_api_key != GaDxH9PBSA:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
