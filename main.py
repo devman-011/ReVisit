@@ -22,29 +22,43 @@ def pkcs7_pad(data: bytes) -> bytes:
     return data + bytes([pad_len]) * pad_len
 
 def pkcs7_unpad(data: bytes) -> bytes:
-    if not data:
-        raise ValueError("Empty data")
     pad_len = data[-1]
     if pad_len < 1 or pad_len > BLOCK_SIZE:
         raise ValueError("Invalid padding")
     return data[:-pad_len]
 
-def safe_b64decode(value: Any) -> bytes:
-    if not isinstance(value, str):
+def b64d(v: Any) -> bytes:
+    if not isinstance(v, str):
         raise ValueError("Expected base64 string")
-    return base64.b64decode(value.strip())
+    return base64.b64decode(v.strip())
 
-def extract_passthrough(body: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "SL no": body.get("SL no"),
-        "name": body.get("name"),
-        "Chat ID": body.get("Chat ID"),
-        "Follow Up date": body.get("Follow Up date"),
-        "Follow Up Status": body.get("Follow Up Status"),
-    }
+PASSTHROUGH_KEYS = [
+    "SL no",
+    "name",
+    "Chat ID",
+    "Follow Up date",
+    "Follow Up Status",
+]
+
+def resolve_passthrough(body: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Priority:
+    1. Explicit value from request body
+    2. Value from payload (encrypted/decrypted content)
+    3. None
+    """
+    resolved = {}
+    for key in PASSTHROUGH_KEYS:
+        if key in body and body[key] not in (None, "", "null"):
+            resolved[key] = body[key]
+        elif key in payload and payload[key] not in (None, "", "null"):
+            resolved[key] = payload[key]
+        else:
+            resolved[key] = None
+    return resolved
 
 # -----------------------------
-# Health check
+# Health
 # -----------------------------
 
 @app.get("/")
@@ -53,7 +67,7 @@ def health():
     return {"status": "ok"}
 
 # -----------------------------
-# Decrypt
+# DECRYPT
 # -----------------------------
 
 @app.post("/decrypt")
@@ -61,21 +75,17 @@ async def decrypt(request: Request):
     try:
         body = await request.json()
 
-        iv = safe_b64decode(body["iv"])
-        encrypted = safe_b64decode(body["data"])
-
-        if len(iv) != BLOCK_SIZE:
-            raise ValueError("IV must be 16 bytes")
+        iv = b64d(body["iv"])
+        encrypted = b64d(body["data"])
 
         cipher = AES.new(KEY, AES.MODE_CBC, iv)
-        decrypted = cipher.decrypt(encrypted)
-        decrypted = pkcs7_unpad(decrypted)
+        decrypted = pkcs7_unpad(cipher.decrypt(encrypted))
 
-        decrypted_json = json.loads(decrypted.decode("utf-8"))
+        payload = json.loads(decrypted.decode("utf-8"))
 
         return {
-            **extract_passthrough(body),
-            **decrypted_json
+            **resolve_passthrough(body, payload),
+            **payload
         }
 
     except Exception as e:
@@ -85,7 +95,7 @@ async def decrypt(request: Request):
         }
 
 # -----------------------------
-# Encrypt
+# ENCRYPT
 # -----------------------------
 
 @app.post("/encrypt")
@@ -93,6 +103,8 @@ async def encrypt(request: Request):
     try:
         body = await request.json()
         payload = body["payload"]
+
+        passthrough = resolve_passthrough(body, payload)
 
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         raw = pkcs7_pad(raw)
@@ -102,7 +114,7 @@ async def encrypt(request: Request):
         encrypted = cipher.encrypt(raw)
 
         return {
-            **extract_passthrough(body),
+            **passthrough,
             "iv": base64.b64encode(iv).decode(),
             "data": base64.b64encode(encrypted).decode(),
         }
@@ -112,5 +124,3 @@ async def encrypt(request: Request):
             "error": "encrypt_failed",
             "message": str(e)
         }
-
-
