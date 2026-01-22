@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from Crypto.Cipher import AES
 import base64
 import json
@@ -7,17 +7,14 @@ from typing import Any, Dict
 
 app = FastAPI()
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-
-KEY_HEX = "de01865dbcbf272e80389feb5f73f195ca043a740df2f66650281d6a41c9cb81"
-KEY = bytes.fromhex(KEY_HEX)
+KEY = bytes.fromhex(
+    "de01865dbcbf272e80389feb5f73f195ca043a740df2f66650281d6a41c9cb81"
+)
 
 BLOCK_SIZE = 16
 
 # -----------------------------
-# UTILS (SAFE)
+# Utils
 # -----------------------------
 
 def pkcs7_pad(data: bytes) -> bytes:
@@ -26,15 +23,13 @@ def pkcs7_pad(data: bytes) -> bytes:
 
 def pkcs7_unpad(data: bytes) -> bytes:
     if not data:
-        raise ValueError("Empty decrypted data")
-
+        raise ValueError("Empty data")
     pad_len = data[-1]
     if pad_len < 1 or pad_len > BLOCK_SIZE:
-        raise ValueError("Invalid PKCS7 padding")
-
+        raise ValueError("Invalid padding")
     return data[:-pad_len]
 
-def safe_base64_decode(value: Any) -> bytes:
+def safe_b64decode(value: Any) -> bytes:
     if not isinstance(value, str):
         raise ValueError("Expected base64 string")
     return base64.b64decode(value.strip())
@@ -49,7 +44,7 @@ def extract_passthrough(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 # -----------------------------
-# HEALTH CHECK (IMPORTANT)
+# Health check
 # -----------------------------
 
 @app.get("/")
@@ -58,7 +53,7 @@ def health():
     return {"status": "ok"}
 
 # -----------------------------
-# DECRYPT
+# Decrypt
 # -----------------------------
 
 @app.post("/decrypt")
@@ -66,11 +61,8 @@ async def decrypt(request: Request):
     try:
         body = await request.json()
 
-        if "iv" not in body or "data" not in body:
-            raise ValueError("Missing iv or data")
-
-        iv = safe_base64_decode(body["iv"])
-        encrypted = safe_base64_decode(body["data"])
+        iv = safe_b64decode(body["iv"])
+        encrypted = safe_b64decode(body["data"])
 
         if len(iv) != BLOCK_SIZE:
             raise ValueError("IV must be 16 bytes")
@@ -87,29 +79,38 @@ async def decrypt(request: Request):
         }
 
     except Exception as e:
-        # IMPORTANT: return JSON, do NOT crash process
         return {
             "error": "decrypt_failed",
             "message": str(e)
         }
 
 # -----------------------------
-# ENCRYPT
+# Encrypt
 # -----------------------------
 
 @app.post("/encrypt")
 async def encrypt(request: Request):
     try:
         body = await request.json()
-
-        if "payload" not in body:
-            raise ValueError("Missing payload")
-
         payload = body["payload"]
 
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         raw = pkcs7_pad(raw)
 
         iv = os.urandom(BLOCK_SIZE)
-        cipher = AES.new(KEY, AES.MODE_CBC, iv)_
+        cipher = AES.new(KEY, AES.MODE_CBC, iv)
+        encrypted = cipher.encrypt(raw)
+
+        return {
+            **extract_passthrough(body),
+            "iv": base64.b64encode(iv).decode(),
+            "data": base64.b64encode(encrypted).decode(),
+        }
+
+    except Exception as e:
+        return {
+            "error": "encrypt_failed",
+            "message": str(e)
+        }
+
 
