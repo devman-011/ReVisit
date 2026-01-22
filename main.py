@@ -3,7 +3,7 @@ from Crypto.Cipher import AES
 import base64
 import json
 import os
-from typing import Any, Dict
+from typing import Dict, Any
 
 app = FastAPI()
 
@@ -32,31 +32,6 @@ def b64d(v: Any) -> bytes:
         raise ValueError("Expected base64 string")
     return base64.b64decode(v.strip())
 
-PASSTHROUGH_KEYS = [
-    "SL no",
-    "name",
-    "Chat ID",
-    "Follow Up date",
-    "Follow Up Status",
-]
-
-def resolve_passthrough(body: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Priority:
-    1. Explicit value from request body
-    2. Value from payload (encrypted/decrypted content)
-    3. None
-    """
-    resolved = {}
-    for key in PASSTHROUGH_KEYS:
-        if key in body and body[key] not in (None, "", "null"):
-            resolved[key] = body[key]
-        elif key in payload and payload[key] not in (None, "", "null"):
-            resolved[key] = payload[key]
-        else:
-            resolved[key] = None
-    return resolved
-
 # -----------------------------
 # Health
 # -----------------------------
@@ -67,13 +42,19 @@ def health():
     return {"status": "ok"}
 
 # -----------------------------
-# DECRYPT
+# DECRYPT (dynamic passthrough)
 # -----------------------------
 
 @app.post("/decrypt")
 async def decrypt(request: Request):
     try:
-        body = await request.json()
+        body: Dict[str, Any] = await request.json()
+
+        # Copy everything except crypto fields
+        passthrough = {
+            k: v for k, v in body.items()
+            if k not in ("iv", "data")
+        }
 
         iv = b64d(body["iv"])
         encrypted = b64d(body["data"])
@@ -84,7 +65,7 @@ async def decrypt(request: Request):
         payload = json.loads(decrypted.decode("utf-8"))
 
         return {
-            **resolve_passthrough(body, payload),
+            **passthrough,
             **payload
         }
 
@@ -95,16 +76,21 @@ async def decrypt(request: Request):
         }
 
 # -----------------------------
-# ENCRYPT
+# ENCRYPT (dynamic passthrough)
 # -----------------------------
 
 @app.post("/encrypt")
 async def encrypt(request: Request):
     try:
-        body = await request.json()
+        body: Dict[str, Any] = await request.json()
+
         payload = body["payload"]
 
-        passthrough = resolve_passthrough(body, payload)
+        # Copy everything except payload
+        passthrough = {
+            k: v for k, v in body.items()
+            if k != "payload"
+        }
 
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         raw = pkcs7_pad(raw)
@@ -124,3 +110,4 @@ async def encrypt(request: Request):
             "error": "encrypt_failed",
             "message": str(e)
         }
+
